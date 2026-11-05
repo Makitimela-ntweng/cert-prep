@@ -1,0 +1,144 @@
+Exam: AZ-900 Microsoft Azure Fundamentals (sample)
+
+Section: Describe cloud concepts (25–30%)
+Topic: Cloud computing
+
+QUESTION 1
+Your company wants to keep sensitive workloads on servers it owns, but send overflow traffic to the cloud during peak periods. Which cloud model supports this?
+A. Public cloud
+B. Private cloud
+C. Hybrid cloud
+D. Multi-tenant cloud
+Answer: C
+Explanation: A hybrid cloud combines on-premises infrastructure you control with public cloud resources, so workloads can burst into the public cloud when demand spikes.
+
+QUESTION 2
+Which two statements describe the consumption-based pricing model? (Choose two.)
+A. There are no upfront infrastructure costs.
+B. You pay for reserved hardware even when it sits idle.
+C. You pay only for the resources you use.
+D. You pay a fixed fee that does not depend on usage.
+Answer: A, C
+Explanation: With consumption-based pricing there is no capital expenditure up front, and you are billed only for what you consume.
+
+Topic: Cloud service types
+
+QUESTION 3
+You deploy virtual machines and are responsible for patching their operating systems. Which service type are you using?
+A. Infrastructure as a service (IaaS)
+B. Platform as a service (PaaS)
+C. Software as a service (SaaS)
+Answer: A
+Explanation: In IaaS the provider manages the physical hardware, while you manage the operating system, runtime and applications.
+
+QUESTION 4
+Microsoft 365 is an example of which cloud service type?
+A. IaaS
+B. PaaS
+C. SaaS
+Answer: C
+Explanation: Microsoft 365 is complete, hosted software that users consume over the internet, which makes it SaaS.
+
+Section: Describe Azure architecture and services (35–40%)
+Topic: Core architectural components
+
+QUESTION 5
+What is an Azure availability zone?
+A. A geographic area containing at least one datacenter
+B. One or more physically separate datacenters within an Azure region
+C. A logical container for related resources
+D. A pair of regions in the same geography
+Answer: B
+Explanation: Availability zones are physically separate datacenters inside a region, each with independent power, cooling and networking.
+
+QUESTION 6
+Which statement about Azure region pairs is true?
+A. Paired regions are always on different continents.
+B. Planned platform updates roll out to one region in a pair at a time.
+C. Every Azure region has exactly two paired regions.
+D. Region pairs replicate all of your data automatically.
+Answer: B
+Explanation: Azure staggers planned updates across a region pair so that only one region is updated at a time, which reduces the risk of downtime.
+
+Topic: Compute and networking
+
+QUESTION 7
+You need to run small pieces of code in response to events without managing any servers. Which service should you use?
+A. Azure Virtual Machines
+B. Azure Functions
+C. Azure Kubernetes Service
+D. Azure Virtual Desktop
+Answer: B
+Explanation: Azure Functions is an event-driven, serverless compute service. You write the code and Azure handles the infrastructure.
+
+QUESTION 8
+Which service provides a private connection from your on-premises network to Azure that does not travel over the public internet?
+A. Azure VPN Gateway
+B. Azure ExpressRoute
+C. Azure DNS
+D. Azure Front Door
+Answer: B
+Explanation: ExpressRoute uses a dedicated private connection through a connectivity provider. A VPN gateway encrypts traffic but still sends it over the internet.
+
+Topic: Storage
+
+QUESTION 9
+Data must be kept for seven years, is almost never read, and the business can wait several hours to retrieve it. Which access tier is the cheapest option?
+A. Hot
+B. Cool
+C. Cold
+D. Archive
+Answer: D
+Explanation: The Archive tier has the lowest storage cost and the highest retrieval latency, which suits long-term retention.
+
+Section: Describe Azure management and governance (30–35%)
+Topic: Cost management
+
+QUESTION 10
+Which tool compares the cost of running your current on-premises workloads with the cost of running them in Azure?
+A. Azure Pricing calculator
+B. Total Cost of Ownership (TCO) calculator
+C. Azure Advisor
+D. Microsoft Cost Management budgets
+Answer: B
+Explanation: The TCO calculator estimates the savings of migrating on-premises workloads. The Pricing calculator estimates the cost of new Azure resources.
+
+Topic: Governance and compliance
+
+QUESTION 11
+You need to stop administrators from accidentally deleting a production resource group. What should you apply?
+A. A resource lock
+B. A tag
+C. A management group
+D. An Azure Blueprint
+Answer: A
+Explanation: A CanNotDelete resource lock blocks deletion even for users who have permission to delete the resource.
+
+QUESTION 12
+Your company requires that resources be created only in specific regions. Which service enforces this rule?
+A. Azure role-based access control (RBAC)
+B. Azure Policy
+C. Microsoft Purview
+D. Azure Monitor
+Answer: B
+Explanation: Azure Policy evaluates resources against rules such as "Allowed locations" and can deny non-compliant deployments.
+
+Topic: Monitoring tools
+
+QUESTION 13
+Which service tells you about Azure outages and planned maintenance that affect your resources?
+A. Azure Advisor
+B. Azure Service Health
+C. Azure Monitor Logs
+D. Microsoft Defender for Cloud
+Answer: B
+Explanation: Azure Service Health gives a personalized view of service incidents, planned maintenance and health advisories for the services you use.
+
+QUESTION 14
+Which two tools can run scripts that create Azure resources? (Choose two.)
+A. Azure CLI
+B. Azure Advisor
+C. Azure PowerShell
+D. Azure Service Health
+Answer: A, C
+Explanation: Azure CLI and Azure PowerShell are command-line tools that can automate resource creation. Advisor and Service Health only provide recommendations and status.

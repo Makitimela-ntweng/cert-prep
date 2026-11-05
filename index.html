@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mock Exam Center</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="band" id="band">
+  <div class="wrap">
+    <div class="brand"><span class="logo" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span class="t" id="bandTitle">Mock Exam Center</span></div>
+    <div class="meta" id="bandMeta"></div>
+  </div>
+  <div class="progress" id="progress" hidden><i></i></div>
+  <div class="strip" id="strip" hidden></div>
+</header>
+
+<div id="view"><p class="loading">Loading questions…</p></div>
+<div id="modalRoot"></div>
+<div id="toast" class="toast" role="status" hidden></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+{
+  "headers": [
+    { "source": "/(dump\.txt|dump\.json|config\.js)", "headers": [{ "key": "Cache-Control", "value": "no-cache" }] }
+  ]
+}
