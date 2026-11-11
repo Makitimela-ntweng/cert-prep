@@ -5,17 +5,18 @@ A Microsoft-style practice exam site. Plain HTML, CSS and JavaScript, so it depl
 | File | What it is |
 | --- | --- |
 | `index.html`, `styles.css`, `app.js` | The app |
-| `dump.txt` | The exam everyone sees. Replace it with your own dump (or use `dump.json`). |
+| `dump.txt` (optional) | Add one to preload an exam for every visitor. Without it, the site opens on an upload screen. |
 | `config.js` | Supabase keys. Leave empty to run without accounts. |
 | `supabase/schema.sql` | Database tables and security rules for accounts |
 
-## 1. Add your exam
+## 1. Using it
 
-Replace `dump.txt` with your exam dump. Format:
+Open the site and upload your exam dump (PDF, Word .docx, .txt or .json). The site reads the questions and builds the practice exams straight away. The dump is remembered in that browser, so you only upload it once.
+
+The reader looks for this shape, which most dumps already follow:
 
 ```
 Exam: AZ-104 Microsoft Azure Administrator
-
 Section: Manage Azure identities and governance (20–25%)
 Topic: Manage Microsoft Entra users and groups
 
@@ -23,8 +24,6 @@ QUESTION 1
 Question text...
 A. Option
 B. Option
-C. Option
-D. Option
 Answer: B
 Explanation: Optional.
 ```
@@ -63,7 +62,7 @@ and `npx vercel --prod` for the production URL.
 
 ## Running locally
 
-The app fetches `dump.txt`, so open it through a local server rather than double-clicking `index.html`:
+Open it through a local server rather than double-clicking `index.html`:
 
 ```bash
 npx serve .

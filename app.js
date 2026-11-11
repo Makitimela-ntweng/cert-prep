@@ -1,34 +1,6 @@
 /* Mock Exam Center
-   Static app: index.html + styles.css + app.js + config.js + dump.txt.
+   Static app: index.html + styles.css + app.js + config.js. People upload their own exam dump; an optional dump.txt preloads one for everyone.
    Accounts and cloud progress use Supabase when config.js has keys; otherwise everything is stored in the browser. */
-
-const TEMPLATE = `Exam: AZ-104 Microsoft Azure Administrator
-
-Section: Manage Azure identities and governance (20–25%)
-Topic: Manage Microsoft Entra users and groups
-
-QUESTION 1
-Question text goes here. It can run over
-several lines.
-A. First option
-B. Second option
-C. Third option
-D. Fourth option
-Answer: B
-Explanation: Why B is right. Optional, can be several lines.
-
-QUESTION 2
-A multiple-answer question. (Choose two.)
-A. Option
-B. Option
-C. Option
-D. Option
-Answer: A, D
-
-Topic: Manage access to Azure resources
-
-QUESTION 3
-...`;
 
 /* ---------- Helpers ---------- */
 const $ = (s, el = document) => el.querySelector(s);
@@ -48,7 +20,7 @@ const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 const shuffle = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 const LETTERS = 'ABCDEFGHIJ';
 let toastTimer;
-function toast(text) { const t = $('#toast'); t.textContent = text; t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, 4000); }
+function toast(text) { const t = $('#toast'); t.textContent = text; t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, Math.max(4000, text.length * 60)); }
 
 /* ---------- Parsing ---------- */
 function parseAnswerLetters(s) {
@@ -73,41 +45,86 @@ function finishQuestion(q, list, stats) {
 }
 
 function parseText(text) {
-  const lines = text.replace(/\r/g, '').split('\n');
+  const lines = text.replace(/\r/g, '').replace(/[   \t]/g, ' ').split('\n');
   const reTitle = /^\s*#*\s*(?:exam(?:\s+title)?|title)\s*[:\-–]\s*(.+)$/i;
   const reSec = /^\s*#*\s*(?:section|domain|module|skill area)\s*\d*\s*[:\-–]\s*(.+)$/i;
-  const reTop = /^\s*#*\s*(?:topic|sub-?topic|objective)\s*[\d.]*\s*[:\-–]\s*(.+)$/i;
-  const reQ = /^\s*#*\s*\**\s*(?:question|q)\s*#?\s*(\d+)\s*\**\s*[:.)\-–]?\s*(.*)$/i;
-  const reNum = /^\s*(\d{1,4})[.)]\s+(.+)$/;
-  const reOpt = /^\s*\(?([A-Ja-j])[.)]\s+(.*)$/;
-  const reAns = /^\s*\**\s*(?:correct\s+)?answers?\s*\**\s*[:\-–]\s*(.*)$/i;
-  const reExp = /^\s*\**\s*(?:explanation|rationale|references?)\s*\**\s*[:\-–]\s*(.*)$/i;
+  const reTop = /^\s*#*\s*(?:topic|sub-?topic|objective)\s*[\d.]*\s*[:\-–,]\s*(\S.+)$/i;   // Topic: X · Topic 2 - X · Topic 3, Contoso case study
+  const reBareTopic = /^\(?\s*(?:exam\s+)?topic\s*\d+\s*\)?$/i;                          // "Topic 1" on its own: a page heading with no name
+  // QUESTION 1 · NEW QUESTION 1 · QUESTION NO: 1 · Question #1 Topic 1 · Question: 1 · Question 1 of 300 · Q1.
+  const reQ = /^\s*[#*]*\s*(?:new\s+)?(?:question|q)\s*(?:no\.?|number|#)?\s*[:.#\-–]?\s*(\d{1,4})\b(?:\s*(?:of|\/)\s*\d+)?\s*\**\s*[:.)\-–]?\s*(.*)$/i;
+  const reNum = /^\s*(\d{1,4})\s*[.)]\s*(.*)$/;                       // 12. Question text   (dumps with no "Question" label)
+  const reOpt = /^\s*\(?([A-Ja-j])\s*[.):]\s*(\S.*)$/;                 // A. / A) / (A) / A:
+  const reAns = /^\s*\**\s*(?:the\s+)?(?:correct|suggested|right|best|most\s+voted)?\s*(?:answers?|ans)\s*(?:\(s\))?\s*(?:is|are)?\s*\**\s*[:\-–.=]?\s*(.*)$/i;
+  const reExp = /^\s*\**\s*(?:explanation|rationale|reasoning|references?)(?:\s*\/\s*references?)?\s*\**\s*(?:[:\-–]\s*(.*))?$/i;
+  const reTopicTag = /^[-–:]?\s*\(?\s*(?:exam\s+)?topic\s*\d+\s*\)?\s*/i;
+  const isNone = v => /^[\[(]?\s*none\s*[\])]?$/i.test(v);
   let title = '', section = 'General', topic = 'General';
   const list = [], stats = { skipped: 0 };
-  let q = null, mode = 'stem';
-  const newQ = first => { finishQuestion(q, list, stats); q = { stem: first || '', options: [], answer: [], explanation: '', section, topic }; mode = 'stem'; };
+  let q = null, mode = 'stem', lastNum = 0, labelled = false;
+  const newQ = (num, first) => {
+    finishQuestion(q, list, stats);
+    q = { label: num, stem: (first || '').replace(reTopicTag, ''), options: [], answer: [], explanation: '', section, topic };
+    mode = 'stem'; lastNum = num;
+  };
+  const addExp = t => { q.explanation += (q.explanation ? '\n' : '') + t; };
+  // "A. Yes B. No" on one line becomes two options.
+  const addOptions = (key, text, lower) => {
+    let i = LETTERS.indexOf(key);
+    while (i < LETTERS.length - 1) {
+      const next = lower ? LETTERS[i + 1].toLowerCase() : LETTERS[i + 1];
+      const m = text.match(new RegExp(`\\s\\(?${next}[.)]\\s+`));
+      if (!m) break;
+      q.options.push({ key: LETTERS[i], text: text.slice(0, m.index).trim() });
+      text = text.slice(m.index + m[0].length); i++;
+    }
+    q.options.push({ key: LETTERS[i], text: text.trim() });
+  };
 
-  for (const raw of lines) {
-    const line = raw.trimEnd();
+  // An answer key listed separately ("1. B", "2) A, C", ...) is matched to questions by number afterwards.
+  const reKey = /^\s*(?:q(?:uestion)?\s*)?(\d{1,4})\s*[.):\-–]?\s*([A-J](?:\s*[,&\/]?\s*[A-J]){0,5})\s*$/i;
+  const keyLines = new Map();
+  lines.forEach((l, i) => { const m = l.match(reKey); if (m) keyLines.set(i, [+m[1], parseAnswerLetters(m[2])]); });
+  const useKey = keyLines.size >= 5, keyed = {};
+
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li].trim();
     let m;
-    if (!line.trim() || /^\s*[-=_*]{3,}\s*$/.test(line)) { if (q && mode === 'stem' && q.stem) q.stem += '\n'; continue; }
+    if (useKey && keyLines.has(li)) { const [n, a] = keyLines.get(li); keyed[n] = a; continue; }
+    if (!line || /^[-=_*]{3,}$/.test(line)) { if (q && mode === 'stem' && q.stem) q.stem += '\n'; continue; }
     if (!title && !q && (m = line.match(reTitle))) { title = m[1].trim(); continue; }
-    if ((m = line.match(reSec))) { section = m[1].trim(); topic = 'General'; if (q && !q.options.length && !q.stem.trim()) { q.section = section; q.topic = topic; } continue; }
+    if ((m = line.match(reSec))) {
+      if (isNone(m[1].trim())) continue;
+      section = m[1].trim(); topic = 'General';
+      if (q && !q.options.length && !q.stem.trim()) { q.section = section; q.topic = topic; }
+      continue;
+    }
     if ((m = line.match(reTop))) { topic = m[1].trim(); if (q && !q.options.length && !q.stem.trim()) q.topic = topic; continue; }
-    if ((m = line.match(reQ))) { newQ(m[2]); continue; }
-    if ((!q || mode === 'exp' || mode === 'after') && (m = line.match(reNum))) { newQ(m[2]); continue; }
+    if ((m = line.match(reQ))) { labelled = true; newQ(+m[1], m[2]); continue; }
+    // Bare "12." starts a question only in dumps without "Question" labels, and only as the next number in sequence.
+    if (!labelled && (m = line.match(reNum)) && (!q || (+m[1] === lastNum + 1 && mode !== 'stem'))) { newQ(+m[1], m[2]); continue; }
     if (!q) continue;
-    if ((m = line.match(reAns))) { q.answer = parseAnswerLetters(m[1]); q.answerText = m[1]; mode = 'after'; continue; }
-    if ((m = line.match(reExp))) { q.explanation += (q.explanation ? '\n' : '') + m[1]; mode = 'exp'; continue; }
-    if (mode === 'exp' || mode === 'after') { q.explanation += (q.explanation ? '\n' : '') + line.trim(); mode = 'exp'; continue; }
+    if (reBareTopic.test(line) || (mode === 'stem' && !q.stem.trim() && reTopicTag.test(line) && !line.replace(reTopicTag, ''))) continue;
+    if (mode === 'ans') {
+      const letters = parseAnswerLetters(line);
+      if (letters.length && line.length <= 24) { q.answer = letters; q.answerText = line; mode = 'after'; continue; }
+      mode = 'exp';
+    }
+    if (q.options.length && !q.answer.length && mode !== 'exp' && (m = line.match(reAns))) {
+      q.answer = parseAnswerLetters(m[1]); q.answerText = m[1];
+      mode = q.answer.length || q.answerText.trim() ? 'after' : 'ans';
+      continue;
+    }
+    if (q.options.length && (m = line.match(reExp))) { if (m[1]) addExp(m[1]); mode = 'exp'; continue; }
+    if (mode === 'exp' || mode === 'after' || mode === 'ans') { addExp(line); mode = 'exp'; continue; }
     if ((m = line.match(reOpt)) && (mode === 'opts' || q.stem.trim())) {
       const key = m[1].toUpperCase();
-      if (!q.options.some(o => o.key === key)) { q.options.push({ key, text: m[2].trim() }); mode = 'opts'; continue; }
+      if (key === LETTERS[q.options.length]) { addOptions(key, m[2], m[1] !== key); mode = 'opts'; continue; }
     }
-    if (mode === 'opts') { const o = q.options[q.options.length - 1]; o.text += ' ' + line.trim(); continue; }
-    q.stem += (q.stem && !q.stem.endsWith('\n') ? '\n' : '') + line.trim();
+    if (mode === 'opts') { const o = q.options[q.options.length - 1]; o.text += ' ' + line; continue; }
+    q.stem += (q.stem && !q.stem.endsWith('\n') ? '\n' : '') + line;
   }
   finishQuestion(q, list, stats);
+  list.forEach(x => { if (!x.answer.length && keyed[x.label]) x.answer = keyed[x.label].filter(k => x.options.some(o => o.key === k)); });
   return { title, questions: list, skipped: stats.skipped };
 }
 
@@ -142,36 +159,257 @@ function parseJSON(text) {
   return { title: Array.isArray(data) ? '' : (data.title || data.exam || ''), questions: list, skipped: stats.skipped };
 }
 
-function parseDump(text) {
+function parseDump(text, fileName) {
   const t = text.trim();
   const r = /^[\[{]/.test(t) ? parseJSON(t) : parseText(t);
+  // No "Exam:" line? Name it after the file, e.g. "AZ-104 dump v3.pdf" → "AZ-104 dump v3".
+  if (!r.title && fileName && fileName !== 'pasted text') r.title = fileName.replace(/\.[a-z0-9]+$/i, '').replace(/[_]+/g, ' ').trim();
   r.questions.forEach((q, i) => { q.num = i + 1; q.multi = q.answer.length > 1 || (!q.answer.length && /choose\s+(two|three|four|2|3|4)|select\s+(two|three|2|3)/i.test(q.stem)); });
+  autoGroup(r);
   r.rev = hash(t);
   // Progress is keyed by exam title, so fixing a typo in the dump keeps everyone's progress.
   r.id = slug(r.title) || r.rev;
   return r;
 }
 
+/* ---------- Automatic topics ---------- */
+// When a dump doesn't name its sections or topics, questions are sorted into Microsoft exam subject areas by keywords in the question and options.
+const TAXONOMY = [
+  ['Identity and access', [
+    ['Users, groups and Entra ID', ['entra', 'entra id', 'azure ad', 'azure active directory', 'tenant', 'guest user', 'external user', 'b2b', 'b2c', 'security group', 'microsoft 365 group', 'dynamic group', 'group membership', 'directory', 'entra connect', 'ad connect', 'custom domain', 'administrative unit']],
+    ['Sign-in and MFA', ['mfa', 'multi-factor', 'multifactor', 'conditional access', 'sign-in', 'single sign-on', 'sso', 'passwordless', 'password', 'sspr', 'self-service password reset', 'identity protection', 'authentication']],
+    ['Roles and permissions', ['rbac', 'role-based access', 'role assignment', 'owner role', 'contributor', 'reader role', 'custom role', 'privileged identity management', 'pim', 'least privilege', 'permission', 'managed identity', 'service principal', 'app registration']]]],
+  ['Governance and cost', [
+    ['Policy, locks and tags', ['azure policy', 'policy definition', 'initiative', 'resource lock', 'lock', 'tag', 'blueprint', 'management group', 'compliance', 'governance']],
+    ['Subscriptions and cost', ['subscription', 'cost', 'budget', 'pricing', 'billing', 'reservation', 'reserved instance', 'tco', 'azure advisor', 'sla', 'service level agreement', 'quota']]]],
+  ['Storage', [
+    ['Storage accounts and redundancy', ['storage account', 'lrs', 'zrs', 'grs', 'ra-grs', 'gzrs', 'redundancy', 'replication', 'access tier', 'hot tier', 'cool tier', 'cold tier', 'archive tier', 'lifecycle management', 'immutable']],
+    ['Blobs, files and data transfer', ['blob', 'blob container', 'azure files', 'file share', 'smb', 'azcopy', 'storage explorer', 'data box', 'file sync', 'shared access signature', 'sas', 'access key', 'import/export']]]],
+  ['Compute', [
+    ['Virtual machines', ['virtual machine', 'vm', 'scale set', 'vmss', 'availability set', 'availability zone', 'managed disk', 'disk', 'vm size', 'resize', 'bastion', 'rdp', 'ssh', 'dedicated host', 'spot']],
+    ['App Service and serverless', ['app service', 'web app', 'app service plan', 'deployment slot', 'azure functions', 'function app', 'logic app', 'serverless', 'autoscale', 'scale out', 'static web app']],
+    ['Containers', ['container instance', 'aci', 'kubernetes', 'aks', 'docker', 'container registry', 'acr', 'container apps', 'pod', 'node pool']],
+    ['Templates and automation', ['arm template', 'resource manager template', 'bicep', 'template', 'powershell', 'azure cli', 'cloud shell', 'azure automation', 'runbook', 'terraform', 'desired state']]]],
+  ['Networking', [
+    ['Virtual networks and security', ['virtual network', 'vnet', 'subnet', 'network security group', 'nsg', 'application security group', 'peering', 'route table', 'user-defined route', 'udr', 'service endpoint', 'private endpoint', 'private link', 'azure firewall', 'firewall', 'ip address', 'public ip', 'nat gateway']],
+    ['Hybrid connectivity', ['vpn', 'vpn gateway', 'expressroute', 'site-to-site', 'point-to-site', 'virtual wan', 'on-premises network', 'local network gateway', 'virtual network gateway']],
+    ['Load balancing and DNS', ['load balancer', 'application gateway', 'front door', 'traffic manager', 'dns', 'cdn', 'waf', 'web application firewall', 'private dns zone']]]],
+  ['Monitoring and recovery', [
+    ['Monitoring and alerts', ['azure monitor', 'log analytics', 'kql', 'kusto', 'alert', 'action group', 'metric', 'diagnostic setting', 'application insights', 'workbook', 'network watcher', 'service health', 'activity log', 'connection monitor']],
+    ['Backup and disaster recovery', ['backup', 'recovery services vault', 'site recovery', 'restore', 'disaster recovery', 'snapshot', 'backup policy', 'failover', 'rpo', 'rto']]]],
+  ['Security', [
+    ['Threat protection', ['defender', 'microsoft defender', 'sentinel', 'siem', 'soar', 'security center', 'secure score', 'threat', 'vulnerability', 'ddos', 'incident', 'just-in-time']],
+    ['Keys, secrets and data protection', ['key vault', 'secret', 'certificate', 'encryption', 'encrypt', 'purview', 'information protection', 'sensitivity label', 'dlp', 'data loss prevention', 'retention label', 'ediscovery']]]],
+  ['Data and AI', [
+    ['Databases', ['sql', 'sql database', 'database', 'cosmos db', 'mysql', 'postgresql', 'table storage', 'managed instance', 'elastic pool', 'dtu', 'vcore']],
+    ['Analytics', ['synapse', 'data factory', 'databricks', 'data lake', 'stream analytics', 'event hubs', 'power bi', 'fabric', 'lakehouse', 'warehouse', 'dax', 'semantic model', 'report', 'dashboard']],
+    ['AI services', ['openai', 'azure openai', 'cognitive services', 'ai services', 'machine learning', 'language service', 'computer vision', 'vision', 'speech', 'bot', 'copilot', 'responsible ai', 'document intelligence', 'ai search']]]],
+  ['Microsoft 365 and Power Platform', [
+    ['Microsoft 365 apps and devices', ['microsoft 365', 'office 365', 'exchange', 'exchange online', 'sharepoint', 'onedrive', 'teams', 'mailbox', 'intune', 'endpoint manager', 'device', 'autopilot', 'windows 365']],
+    ['Power Platform and Dynamics', ['power apps', 'power automate', 'power pages', 'dataverse', 'canvas app', 'model-driven', 'cloud flow', 'connector', 'dynamics 365', 'power virtual agents', 'copilot studio']]]],
+  ['Development and integration', [
+    ['DevOps and source control', ['azure devops', 'devops', 'github', 'repository', 'repo', 'pipeline', 'ci/cd', 'git', 'pull request', 'artifact', 'yaml']],
+    ['APIs and messaging', ['api management', 'api', 'service bus', 'event grid', 'queue', 'webhook', 'topic subscription', 'event-driven']]]]
+];
+const OTHER = ['Other', 'Other questions'];
+const kwCache = {};
+const kwRe = k => kwCache[k] ||= new RegExp(`(^|[^a-z0-9])${k.replace(/[.*+?^${}()|[\]\\\/]/g, '\\$&')}(s|es)?(?![a-z0-9])`);
+function classify(q) {
+  const stem = q.stem.toLowerCase(), opts = q.options.map(o => o.text).join(' \n ').toLowerCase();
+  let best = OTHER, bestScore = 0;
+  for (const [sec, topics] of TAXONOMY) for (const [top, kws] of topics) {
+    let s = 0;
+    for (const k of kws) { const re = kwRe(k); if (re.test(stem)) s += 2; else if (re.test(opts)) s += 1; }
+    if (s > bestScore) { bestScore = s; best = [sec, top]; }
+  }
+  return best;
+}
+// Questions the dump puts under a named section or topic keep it; the rest are grouped by subject.
+function autoGroup(r) {
+  const loose = r.questions.filter(q => q.section === 'General' && q.topic === 'General');
+  if (!loose.length) return;
+  loose.forEach(q => { [q.section, q.topic] = classify(q); });
+  // Named topics with no section (such as case studies) get a heading of their own beside the subject sections.
+  r.questions.forEach(q => { if (q.section === 'General') q.section = /case stud/i.test(q.topic) ? 'Case studies' : 'More topics'; });
+  r.autoTopics = true;
+}
+const RANK = new Map();
+TAXONOMY.forEach(([sec, topics], i) => { RANK.set(sec, i); topics.forEach(([t], j) => RANK.set(sec + '\u0000' + t, j)); });
+RANK.set(OTHER[0], 999);
+
+/* ---------- Reading PDF and Word files ---------- */
+// The readers are downloaded only when someone picks a PDF or .docx file.
+const LIBS = {
+  pdf: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
+  pdfWorker: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js',
+  jszip: 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js'
+};
+const scriptLoads = {};
+function loadScript(src) {
+  return scriptLoads[src] ||= new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src; s.onload = resolve;
+    s.onerror = () => { delete scriptLoads[src]; s.remove(); reject(new Error('Could not download the file reader. Check your internet connection and try again.')); };
+    document.head.appendChild(s);
+  });
+}
+
+const looksLikeContent = l => /^\s*(\(?[A-J][.)]\s|(question|q)\s*#?\d|(correct\s+)?answer|explanation|section|topic)/i.test(l);
+
+async function pdfToText(buf) {
+  await loadScript(LIBS.pdf);
+  pdfjsLib.GlobalWorkerOptions.workerSrc = LIBS.pdfWorker;
+  const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+  const pages = [];
+  for (let p = 1; p <= doc.numPages; p++) {
+    const tc = await (await doc.getPage(p)).getTextContent();
+    const lines = []; let cur = '', lastY = null;
+    for (const it of tc.items) {
+      if (!('str' in it)) continue;
+      const y = it.transform[5];
+      if (lastY !== null && Math.abs(y - lastY) > 2) { lines.push(cur); cur = ''; }
+      if (cur && it.str && !/\s$/.test(cur) && !/^\s/.test(it.str)) cur += ' ';
+      cur += it.str; lastY = y;
+      if (it.hasEOL) { lines.push(cur); cur = ''; lastY = null; }
+    }
+    if (cur) lines.push(cur);
+    pages.push(lines.map(l => l.replace(/\s+/g, ' ').trim()));
+  }
+  // Drop running headers and footers: lines at the top or bottom of most pages, and bare page numbers.
+  const edge = ls => { const f = ls.filter(Boolean); return new Set([...f.slice(0, 2), ...f.slice(-2)]); };
+  const seen = new Map();
+  pages.forEach(ls => edge(ls).forEach(l => seen.set(l, (seen.get(l) || 0) + 1)));
+  const limit = Math.max(3, Math.ceil(pages.length * 0.5));
+  const junk = l => !looksLikeContent(l) && ((pages.length >= 4 && seen.get(l) >= limit) || /^(page\s*)?\d+(\s*(of|\/)\s*\d+)?$/i.test(l));
+  return { text: pages.map(ls => ls.filter(l => !junk(l)).join('\n')).join('\n'), pages: pages.length };
+}
+
+// Reads the .docx XML directly so Word's automatic numbering ("1.", "A.", "a)") comes through exactly as it shows in Word.
+async function docxToText(buf) {
+  await loadScript(LIBS.jszip);
+  const zip = await JSZip.loadAsync(buf);
+  const read = async p => { const f = zip.file(p); return f ? f.async('string') : null; };
+  const docXml = await read('word/document.xml');
+  if (!docXml) throw new Error('This Word file could not be opened. Save it again as .docx and retry.');
+  const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+  const xml = s => new DOMParser().parseFromString(s, 'application/xml');
+  const kids = (el, name) => el ? [...el.getElementsByTagNameNS(W, name)] : [];
+  const kid = (el, name) => kids(el, name)[0];
+  const val = (el, name = 'val') => el ? el.getAttributeNS(W, name) || el.getAttribute('w:' + name) : null;
+
+  // Numbering definitions: numId → abstract list → per-level format, label pattern and start value.
+  const abstracts = {}, nums = {}, styleNum = {};
+  const numXml = await read('word/numbering.xml');
+  if (numXml) {
+    const nd = xml(numXml);
+    kids(nd, 'abstractNum').forEach(a => {
+      const lv = {};
+      kids(a, 'lvl').forEach(l => { lv[val(l, 'ilvl')] = { fmt: val(kid(l, 'numFmt')) || 'decimal', text: val(kid(l, 'lvlText')) ?? '%1.', start: +(val(kid(l, 'start')) || 1) }; });
+      abstracts[val(a, 'abstractNumId')] = lv;
+    });
+    kids(nd, 'num').forEach(n => { nums[val(n, 'numId')] = val(kid(n, 'abstractNumId')); });
+  }
+  // List styles such as "List Number" carry their numbering in styles.xml.
+  const stylesXml = await read('word/styles.xml');
+  if (stylesXml) kids(xml(stylesXml), 'style').forEach(s => { const np = kid(s, 'numPr'); if (np) styleNum[val(s, 'styleId')] = { numId: val(kid(np, 'numId')), ilvl: val(kid(np, 'ilvl')) || '0' }; });
+
+  const roman = n => { let r = ''; [[1000,'m'],[900,'cm'],[500,'d'],[400,'cd'],[100,'c'],[90,'xc'],[50,'l'],[40,'xl'],[10,'x'],[9,'ix'],[5,'v'],[4,'iv'],[1,'i']].forEach(([v, s]) => { while (n >= v) { r += s; n -= v; } }); return r; };
+  const fmtNum = (n, fmt) => fmt === 'upperLetter' ? LETTERS[(n - 1) % 26] || String.fromCharCode(64 + ((n - 1) % 26) + 1)
+    : fmt === 'lowerLetter' ? String.fromCharCode(96 + ((n - 1) % 26) + 1)
+    : fmt === 'upperRoman' ? roman(n).toUpperCase() : fmt === 'lowerRoman' ? roman(n) : fmt === 'bullet' || fmt === 'none' ? '' : String(n);
+  const counters = {};
+  const label = (numId, ilvl) => {
+    const lv = abstracts[nums[numId]]; if (!lv || !lv[ilvl]) return '';
+    const c = counters[numId] ||= {};
+    const lvl = +ilvl;
+    c[lvl] = c[lvl] == null ? lv[ilvl].start : c[lvl] + 1;
+    Object.keys(c).forEach(k => { if (+k > lvl) delete c[k]; });
+    if (lv[ilvl].fmt === 'bullet' || lv[ilvl].fmt === 'none') return '';
+    return lv[ilvl].text.replace(/%(\d)/g, (_, d) => { const L = d - 1, def = lv[L] || lv[ilvl]; return fmtNum(c[L] ?? def.start, def.fmt); });
+  };
+
+  const out = [];
+  kids(xml(docXml), 'p').forEach(p => {
+    let t = '';
+    p.querySelectorAll('*').forEach(n => {
+      if (n.namespaceURI !== W) return;
+      if (n.localName === 't') t += n.textContent;
+      else if (n.localName === 'tab') t += ' ';
+      else if (n.localName === 'br' || n.localName === 'cr') t += '\n';
+    });
+    const ppr = kid(p, 'pPr');
+    const np = ppr && [...ppr.children].find(c => c.localName === 'numPr');
+    const st = styleNum[val(ppr && [...ppr.children].find(c => c.localName === 'pStyle'))];
+    const numId = np ? val(kid(np, 'numId')) : st && st.numId;
+    const ilvl = np ? (val(kid(np, 'ilvl')) || '0') : st && st.ilvl;
+    const prefix = numId && numId !== '0' ? label(numId, ilvl) : '';
+    out.push(prefix && t.trim() ? prefix + ' ' + t : t);
+  });
+  return out.join('\n');
+}
+
+async function readDumpFile(f) {
+  const ext = (f.name.split('.').pop() || '').toLowerCase();
+  uploadBusy(`Reading ${f.name}…`);
+  try {
+    let text;
+    if (ext === 'pdf') {
+      text = (await pdfToText(await f.arrayBuffer())).text;
+      if (!text.trim()) throw new Error('This PDF has no selectable text, so it is probably scanned pages. Run it through OCR first, or paste the text instead.');
+    } else if (ext === 'docx') text = await docxToText(await f.arrayBuffer());
+    else if (ext === 'doc') throw new Error('Older .doc files can\'t be read. Open the file in Word, save it as .docx, and upload that.');
+    else text = await f.text();
+    await loadText(text, f.name);
+  } catch (err) { uploadFailed(err.message || String(err)); }
+}
+
+const DROP_TEXT = 'Drop your exam dump here, or click to choose a file';
+function uploadBusy(text) {
+  const z = $('#dropzone');
+  if (!z) { toast(text); return; }
+  z.classList.add('busy'); $('#dropText').textContent = text; $('#dropErr').hidden = true;
+}
+function uploadFailed(text) {
+  const err = $('#dropErr');
+  if (!err) { toast(text); return; }   // a replacement upload failed: keep the current exam
+  $('#dropzone').classList.remove('busy'); $('#dropText').textContent = DROP_TEXT;
+  err.textContent = text; err.hidden = false;
+}
+async function loadText(text, name) {
+  let r;
+  try { r = parseDump(text, name); } catch (e) { return uploadFailed('This file looks like JSON but could not be read: ' + e.message); }
+  if (!r.questions.length) return uploadFailed('No questions were found in this file. Questions need to be numbered (for example "QUESTION 1"), with lettered options (A. B. C.) and an "Answer:" line.');
+  source = { text, name: name || '' };
+  const saved = store.set('mec.source', source);
+  loadBank(); await switchBank();
+  renderHome(); window.scrollTo(0, 0);
+  const noKey = bank.questions.filter(q => !q.answer.length).length;
+  toast(`Ready: ${bank.questions.length} questions in ${plural(tree(bank.questions).size, 'section')}.` +
+    (noKey ? ` ${noKey} ha${noKey === 1 ? 's' : 've'} no answer and won't be scored.` : '') +
+    (r.skipped ? ` ${plural(r.skipped, 'question')} without A/B/C options (such as drag-and-drop or hotspot) ${r.skipped === 1 ? 'was' : 'were'} skipped.` : '') +
+    (saved ? '' : ' This browser could not save the file, so upload it again after a reload.'));
+}
+
 /* ---------- State ---------- */
 const DEFAULTS = { examSize: 50, minutesPerQ: 2, passing: 700 };
 const CFG = window.MEC_CONFIG || {};
 const sb = CFG.supabaseUrl && CFG.supabaseAnonKey && window.supabase ? window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseAnonKey) : null;
-let settings = Object.assign({}, DEFAULTS, store.get('mec.settings', {}));
+const settings = { ...DEFAULTS };
 let source = store.get('mec.source', null);   // a dump this browser loaded itself
 let siteText = null;                           // dump.txt / dump.json deployed with the site
 let bank, bankFrom = 'none';
 let session = store.get('mec.session', null), view = 'home', reviewFilter = 'all', resFilter = 'all';
-let user = null, history = [], progress = {}, loaderMsg = null;
+let user = null, history = [], progress = {};
+let homeTab = store.get('mec.tab', 'exams') === 'topics' ? 'topics' : 'exams';
 
 function loadBank() {
   bank = null;
-  for (const [text, from] of [[source && source.text, 'local'], [siteText, 'site']]) {
+  for (const [text, from, name] of [[source && source.text, 'local', source && source.name], [siteText, 'site', '']]) {
     if (!text) continue;
-    try { const r = parseDump(text); if (r.questions.length) { bank = r; bankFrom = from; return; } } catch (e) {}
+    try { const r = parseDump(text, name); if (r.questions.length) { bank = r; bankFrom = from; return; } } catch (e) {}
   }
   bank = { title: '', questions: [], id: 'none', rev: 'none', skipped: 0 }; bankFrom = 'none';
 }
-const isSample = () => /\(sample\)/i.test(bank.title);
 const Q = num => bank.questions[num - 1];
 const saveSession = () => store.set('mec.session', session);
 const progressKey = () => 'mec.progress.' + bank.id;
@@ -264,7 +502,11 @@ function tree(qs) {
     if (!t.has(q.topic)) t.set(q.topic, []);
     t.get(q.topic).push(q);
   });
-  return m;
+  if (!bank || !bank.autoTopics) return m;
+  // Automatic topics are listed in a fixed subject order rather than the order questions happen to appear.
+  const rank = k => RANK.get(k) ?? 500;
+  return new Map([...m.entries()].sort((a, b) => rank(a[0]) - rank(b[0]))
+    .map(([s, t]) => [s, new Map([...t.entries()].sort((a, b) => rank(s + '\u0000' + a[0]) - rank(s + '\u0000' + b[0])))]));
 }
 
 /* ---------- Band ---------- */
@@ -285,10 +527,35 @@ function setBand(title, metaHtml, progressFrac, stripHtml) {
   s.innerHTML = stripHtml ? `<div class="wrap">${stripHtml}</div>` : '';
 }
 
+/* ---------- Upload ---------- */
+function renderUpload() {
+  view = 'home';
+  setBand('Mock Exam Center', accountHtml());
+  $('#view').innerHTML = `<main class="upload wrap">
+    <div class="hero">
+      <h1>Upload your exam dump</h1>
+      <p class="muted">The site reads the questions and builds your practice exams: 50 questions each, grouped by the sections and topics in the dump.</p>
+    </div>
+    <label class="dropzone" id="dropzone" for="file" tabindex="0">
+      <svg viewBox="0 0 24 24" width="40" height="40" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5"/><path d="M4 15v3.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15"/></svg>
+      <b id="dropText">${DROP_TEXT}</b>
+      <span class="muted small">PDF, Word (.docx), .txt or .json</span>
+    </label>
+    <div class="msg err" id="dropErr" role="alert" hidden></div>
+    <details class="guide"><summary>Paste the text instead</summary>
+      <div class="form" style="margin-top:12px">
+        <textarea id="dumpText" spellcheck="false" placeholder="Paste your exam dump here"></textarea>
+        <div class="row"><button class="btn primary" data-act="load-paste">Load questions</button></div>
+      </div>
+    </details>
+  </main>`;
+}
+
 /* ---------- Home ---------- */
 function renderHome() {
+  if (!bank.questions.length) return renderUpload();
   view = 'home';
-  setBand('Mock Exam Center', `<span>${esc(bank.title || 'No exam loaded')}</span>${accountHtml()}`);
+  setBand('Mock Exam Center', `<span>${esc(bank.title || 'Exam dump')}</span>${accountHtml()}`);
   const sets = examSets();
   const tr = tree(bank.questions);
   const secs = [...tr.keys()];
@@ -335,17 +602,30 @@ function renderHome() {
         ${all.att || history.length ? '<button class="btn ghost small" data-act="reset">Reset progress</button>' : ''}</div>
     </section>` : '';
 
-  const skills = secs.map((sec, si) => {
+  // Practice by topic: one block per section, a card per topic.
+  const single = secs.length === 1 && secs[0] === 'General';
+  const topicBlocks = secs.map((sec, si) => {
     const topics = [...tr.get(sec).entries()];
-    const total = topics.reduce((a, [, qs]) => a + qs.length, 0);
-    return `<details class="skill"${si === 0 ? ' open' : ''}>
-      <summary><span class="name">${esc(sec)}</span><span class="count">${total} q · ${plural(topics.length, 'topic')}</span>
-        <button class="btn" data-act="start-sec" data-s="${si}">Practice section</button></summary>
-      ${topics.map(([tn, qs], ti) => { const st = progStats(qs);
-        return `<div class="topic"><span class="tn">${esc(tn)}</span><span class="tstat">${stack(st, 'thin')}${st.att}/${st.n}${st.acc == null ? '' : ' · ' + pct(st.acc)}</span>
-        <button class="btn ghost" data-act="start-topic" data-s="${si}" data-t="${ti}">Practice</button></div>`; }).join('')}
-    </details>`;
+    const st = progStats([...tr.get(sec).values()].flat());
+    const cards = topics.map(([tn, qs], ti) => { const ts = progStats(qs);
+      return `<div class="tcard">
+        <div class="tname">${esc(tn)}</div>
+        <span class="muted small">${plural(qs.length, 'question')}</span>
+        ${stack(ts, 'thin')}
+        <span class="small muted num">${ts.att}/${ts.n} done${ts.acc == null ? '' : ` · <b class="tacc">${pct(ts.acc)}</b> correct`}</span>
+        <div><button class="btn${ts.att ? '' : ' primary'}" data-act="start-topic" data-s="${si}" data-t="${ti}">${ts.att && ts.att < ts.n ? 'Continue' : ts.att ? 'Practise again' : 'Practise'}</button></div>
+      </div>`; }).join('');
+    return `<section class="tsec">
+      ${single ? '' : `<div class="tsec-head">
+        <div class="tsec-title"><h3>${esc(sec)}</h3><span class="muted small">${plural(st.n, 'question')} · ${plural(topics.length, 'topic')} · ${st.att}/${st.n} done${st.acc == null ? '' : ' · ' + pct(st.acc) + ' correct'}</span></div>
+        ${stack(st)}
+        <button class="btn" data-act="start-sec" data-s="${si}">Practise whole section</button>
+      </div>`}
+      <div class="topic-grid">${cards}</div>
+    </section>`;
   }).join('');
+  const mistakes = bank.questions.filter(q => progress[q.num] && progress[q.num].g < 1).length;
+  const untried = bank.questions.filter(q => !progress[q.num] && q.answer.length).length;
 
   const hist = history.slice(0, 10).map(h => `<tr><td class="num">${new Date(h.date).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</td>
     <td>${esc(h.label)}</td><td>${h.mode === 'exam' ? 'Exam' : 'Practice'}</td><td class="num">${h.correct}/${h.total}</td>
@@ -358,93 +638,45 @@ function renderHome() {
   const guestNote = sb && !user && has ? `<div class="notice"><div><b>Practising as a guest.</b> <span class="muted">Create a free account to save your progress and scores across devices.</span></div>
       <div class="row"><button class="btn" data-act="auth" data-tab="signin">Sign in</button><button class="btn primary" data-act="auth" data-tab="signup">Create account</button></div></div>` : '';
 
-  const loaderBody = `<div class="loader">
-        <div class="row"><label class="btn" for="file">Choose file…</label><input id="file" type="file" accept=".txt,.md,.json,text/plain,application/json" hidden>
-          <span class="muted small">.txt, .md or .json. For a PDF or Word dump, copy its text and paste it below.</span></div>
-        <textarea id="dumpText" spellcheck="false" placeholder="Paste your exam dump here">${esc(bankFrom === 'local' ? source.text : '')}</textarea>
-        <div class="fields">
-          <label class="field">Questions per exam<input id="setSize" type="number" min="5" max="500" value="${settings.examSize}"></label>
-          <label class="field">Minutes per question<input id="setMin" type="number" min="0.5" max="10" step="0.5" value="${settings.minutesPerQ}"></label>
-          <label class="field">Passing score (of 1000)<input id="setPass" type="number" min="100" max="1000" step="10" value="${settings.passing}"></label>
-        </div>
-        ${loaderMsg ? `<div class="msg ${loaderMsg.ok ? 'ok' : 'err'}">${esc(loaderMsg.text)}</div>` : ''}
-        <div class="row"><button class="btn primary" data-act="load">Load dump and save settings</button>${bankFrom === 'local' && siteText ? '<button class="btn ghost" data-act="site-dump">Go back to the site\'s exam</button>' : ''}</div>
-        <details class="guide">
-          <summary>Dump format</summary>
-          <ul>
-            <li><code>Exam:</code> on the first line sets the title. Progress is saved per exam title.</li>
-            <li><code>Section:</code> and <code>Topic:</code> lines apply to every question that follows until the next one. Section weights like <code>(20–25%)</code> can stay in the name.</li>
-            <li>Each question starts with <code>QUESTION 12</code>, <code>Question 12:</code> or <code>Q12.</code></li>
-            <li>Options are <code>A.</code> or <code>A)</code> lines. Long options can wrap onto the next line.</li>
-            <li><code>Answer: B</code>, or <code>Answer: A, C</code> / <code>Answer: AC</code> for multiple answers.</li>
-            <li><code>Explanation:</code> is optional and can span several lines.</li>
-            <li>JSON also works: an array of <code>{question, options, answer, explanation, section, topic}</code>.</li>
-          </ul>
-          <pre id="tpl">${esc(TEMPLATE)}</pre>
-          <div class="row" style="margin-top:8px"><button class="btn" data-act="copy-tpl">Copy template</button></div>
-        </details>
-      </div>`;
-
   $('#view').innerHTML = `<main class="home wrap">
     <div class="hero">
       <span class="eyebrow">Practice test${user ? ' · ' + esc(user.user_metadata?.name || user.email) : ''}</span>
-      <h1>${esc(bank.title || 'Load an exam dump to begin')}</h1>
-      ${has ? `<p class="muted">${bank.questions.length} questions · ${plural(secs.length, 'section')} · ${plural(nTopics, 'topic')} · passing score ${settings.passing} of 1000${unscored ? ` · ${unscored} without an answer key` : ''}</p>`
-            : `<p class="muted">Paste or choose your exam dump below. Questions are split into exams of ${settings.examSize} and grouped by the sections and topics in the dump.</p>`}
+      <div class="row" style="justify-content:space-between;align-items:flex-end">
+        <h1>${esc(bank.title || 'Exam dump')}</h1>
+        <button class="btn" data-act="upload">Upload a different dump</button>
+      </div>
+      <p class="muted">${bank.questions.length} questions · ${plural(secs.length, 'section')} · ${plural(nTopics, 'topic')} · passing score ${settings.passing} of 1000${unscored ? ` · ${unscored} without an answer key` : ''}</p>
     </div>
     ${resume}
-    ${isSample() ? `<div class="notice"><div><b>These are sample questions.</b> <span class="muted">Replace dump.txt in the site, or load a dump below, to use your own.</span></div><button class="btn primary" data-act="goto-loader">Load exam dump</button></div>` : ''}
     ${guestNote}
     ${progressPanel}
-    ${has ? `<section>
-      <div class="sec-head"><h2>Practice exams</h2><span class="muted small">${settings.examSize} questions per exam, in dump order</span></div>
+    <div class="hometabs tabs" role="tablist">
+      <button role="tab" aria-selected="${homeTab === 'exams'}" data-act="home-tab" data-tab="exams">Practice exams <span class="tabcount">${examsWithQs.length}</span></button>
+      <button role="tab" aria-selected="${homeTab === 'topics'}" data-act="home-tab" data-tab="topics">Practice by topic <span class="tabcount">${nTopics}</span></button>
+    </div>
+    ${homeTab === 'exams' ? `<section>
+      <div class="sec-head"><p class="muted">Timed, Microsoft-style exams of ${settings.examSize} questions each, in the order of your dump.</p></div>
       <div class="exam-grid">${examCards}</div>
     </section>
-    <section>
-      <div class="sec-head"><h2>Skills measured</h2><button class="btn" data-act="start-all">Practice all ${bank.questions.length} questions</button></div>
-      <div class="skills">${skills}</div>
-    </section>` : ''}
     ${history.length ? `<section><div class="sec-head"><h2>Recent attempts</h2></div>
-      <div class="scroll-x"><table><thead><tr><th>Date</th><th>Set</th><th>Mode</th><th>Correct</th><th>Score</th><th>Result</th></tr></thead><tbody>${hist}</tbody></table></div></section>` : ''}
-    <section id="loader">
-      <div class="sec-head"><h2>Exam dump</h2><span class="muted small">${bankFrom === 'site' ? 'Using the exam published with this site' : bankFrom === 'local' ? `Using a dump loaded in this browser${source.name ? ' (' + esc(source.name) + ')' : ''}` : 'Nothing loaded yet'}</span></div>
-      ${bankFrom === 'site' && !loaderMsg ? `<details class="guide"><summary>Use a different dump in this browser</summary><div style="margin-top:12px">${loaderBody}</div></details>` : loaderBody}
-    </section>
+      <div class="scroll-x"><table><thead><tr><th>Date</th><th>Set</th><th>Mode</th><th>Correct</th><th>Score</th><th>Result</th></tr></thead><tbody>${hist}</tbody></table></div></section>` : ''}`
+    : `<section class="topics">
+      <div class="row" style="justify-content:space-between">
+        <p class="muted" style="max-width:60ch">Practise one topic at a time. Each answer is checked straight away with the explanation, and your score per topic is kept.${bank.autoTopics ? ' Your dump doesn\'t name its topics, so questions were grouped by subject automatically.' : ''}</p>
+        <div class="row">
+          ${mistakes ? `<button class="btn" data-act="start-mistakes">Retry my mistakes (${mistakes})</button>` : ''}
+          ${untried && untried < bank.questions.length ? `<button class="btn" data-act="start-untried">Unanswered only (${untried})</button>` : ''}
+          <button class="btn" data-act="start-all">Practise all ${bank.questions.length}</button>
+        </div>
+      </div>
+      ${topicBlocks}
+    </section>`}
   </main>`;
-  $('#file').addEventListener('change', e => {
-    const f = e.target.files[0]; if (!f) return;
-    const r = new FileReader();
-    r.onload = () => { $('#dumpText').value = r.result; doLoad(f.name); };
-    r.readAsText(f);
-  });
 }
 
 async function switchBank() {
   if (session && session.bankRev !== bank.rev) { session = null; store.del('mec.session'); }
   await Data.load();
-}
-
-async function doLoad(name) {
-  const text = $('#dumpText').value;
-  settings.examSize = Math.max(5, Math.round(+$('#setSize').value || DEFAULTS.examSize));
-  settings.minutesPerQ = Math.max(0.5, +$('#setMin').value || DEFAULTS.minutesPerQ);
-  settings.passing = Math.min(1000, Math.max(100, Math.round(+$('#setPass').value || DEFAULTS.passing)));
-  store.set('mec.settings', settings);
-  if (!text.trim()) { loaderMsg = { ok: true, text: 'Settings saved.' }; renderHome(); return; }
-  let r;
-  try { r = parseDump(text); } catch (e) { loaderMsg = { ok: false, text: 'This looks like JSON but could not be read: ' + e.message }; renderHome(); return; }
-  if (!r.questions.length) { loaderMsg = { ok: false, text: 'No questions found. Each question needs a "QUESTION 1" style header and lettered options (A. B. C.). See the dump format below.' }; renderHome(); return; }
-  source = { text, name: name || (source && source.name) || '' };
-  const saved = store.set('mec.source', source);
-  loadBank(); await switchBank();
-  const t = tree(bank.questions); const nt = [...t.values()].reduce((a, x) => a + x.size, 0);
-  const noKey = bank.questions.filter(q => !q.answer.length).length;
-  loaderMsg = { ok: true, text: `Loaded ${bank.questions.length} questions in ${plural(t.size, 'section')} and ${plural(nt, 'topic')}.` +
-    (r.skipped ? ` Skipped ${plural(r.skipped, 'block')} with no answer options.` : '') +
-    (noKey ? ` ${noKey} question${noKey === 1 ? ' has' : 's have'} no answer key and won't be scored.` : '') +
-    (saved ? '' : ' Your browser blocked saving, so the dump will be gone if you reload.') };
-  renderHome();
-  $('#loader').scrollIntoView({ block: 'start' });
 }
 
 /* ---------- Modal ---------- */
@@ -782,10 +1014,11 @@ const ACT = {
   'start-sec': (b, e) => { e.preventDefault(); const tr = tree(bank.questions), sec = [...tr.keys()][+b.dataset.s]; setup(sec, 'sec:' + sec, [...tr.get(sec).values()].flat(), 'practice'); },
   'start-topic': b => { const tr = tree(bank.questions), sec = [...tr.keys()][+b.dataset.s], [tn, qs] = [...tr.get(sec).entries()][+b.dataset.t]; setup(tn, 'topic:' + sec + '/' + tn, qs, 'practice'); },
   'start-all': () => setup('All questions', 'all', bank.questions, 'practice'),
-  'goto-loader': () => { const d = $('#loader details.guide'); if (d && !$('#dumpText')?.offsetParent) d.open = true; $('#loader').scrollIntoView({ block: 'start' }); $('#dumpText')?.focus({ preventScroll: true }); },
-  'load': () => doLoad(),
-  'site-dump': async () => { source = null; store.del('mec.source'); loadBank(); await switchBank(); loaderMsg = null; renderHome(); toast('Switched back to the site\'s exam.'); },
-  'copy-tpl': b => { const done = () => { b.textContent = 'Copied'; }; try { navigator.clipboard.writeText(TEMPLATE).then(done, selectTpl); } catch (e) { selectTpl(); } },
+  'start-mistakes': () => setup('My mistakes', 'mistakes', bank.questions.filter(q => progress[q.num] && progress[q.num].g < 1), 'practice'),
+  'start-untried': () => setup('Unanswered questions', 'untried', bank.questions.filter(q => !progress[q.num] && q.answer.length), 'practice'),
+  'home-tab': b => { homeTab = b.dataset.tab; store.set('mec.tab', homeTab); renderHome(); },
+  'upload': () => $('#file').click(),
+  'load-paste': () => { const t = $('#dumpText').value; if (!t.trim()) return uploadFailed('Paste the text of your exam dump first.'); uploadBusy('Reading the pasted text…'); loadText(t, 'pasted text'); },
   'reset': () => modal(`<h2>Reset your progress?</h2><p>This clears every practised answer and all ${plural(history.length, 'attempt')} for ${esc(bank.title || 'this exam')}${user ? ' from your account' : ' in this browser'}. It can't be undone.</p><div class="row"><button class="btn" data-act="close" autofocus>Cancel</button><button class="btn primary" data-act="reset-yes">Reset progress</button></div>`),
   'reset-yes': async () => { closeModal(); await Data.reset(); renderHome(); toast('Progress reset.'); },
   'resume': () => session.done ? renderResults() : renderExam(),
@@ -816,13 +1049,26 @@ const ACT = {
   'retake': () => setup(session.label, session.key, session.order.slice().sort((a, b) => a - b).map(Q), session.mode),
   'retake-wrong': () => { const r = computeResult(session); setup(session.label + ' · incorrect', session.key + ':wrong', r.rows.filter(x => x.g != null && x.g < 1).map(x => x.q), 'practice'); }
 };
-function selectTpl() { const r = document.createRange(); r.selectNodeContents($('#tpl')); const s = getSelection(); s.removeAllRanges(); s.addRange(r); }
-
 document.addEventListener('click', e => { const b = e.target.closest('[data-act]'); if (!b || b.disabled) return; const f = ACT[b.dataset.act]; if (f) f(b, e); });
+$('#file').addEventListener('change', e => {
+  const f = e.target.files[0];
+  e.target.value = '';   // lets the same file be picked again
+  if (f) readDumpFile(f);
+});
+// Drag a file anywhere onto the home page to load it.
+const hasFiles = e => [...(e.dataTransfer?.types || [])].includes('Files');
+document.addEventListener('dragover', e => { if (view !== 'home' || !hasFiles(e)) return; e.preventDefault(); $('#dropzone')?.classList.add('over'); });
+document.addEventListener('dragleave', e => { if (!e.relatedTarget) $('#dropzone')?.classList.remove('over'); });
+document.addEventListener('drop', e => {
+  if (view !== 'home' || !hasFiles(e)) return;
+  e.preventDefault(); $('#dropzone')?.classList.remove('over');
+  const f = e.dataTransfer.files[0]; if (f) readDumpFile(f);
+});
 document.addEventListener('change', e => { if (e.target.name === 'opt' && view === 'exam') onOptChange(); });
 document.addEventListener('submit', e => { if (e.target.id === 'authForm') { e.preventDefault(); submitAuth(e.target); } });
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && $('#modalRoot').innerHTML) { closeModal(); return; }
+  if (e.target.id === 'dropzone' && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); $('#file').click(); return; }
   if (view !== 'exam' || $('#modalRoot').innerHTML || e.ctrlKey || e.metaKey || e.altKey) return;
   if (/^(TEXTAREA|SELECT)$/.test(e.target.tagName) || (e.target.tagName === 'INPUT' && e.target.type !== 'radio' && e.target.type !== 'checkbox')) return;
   if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
